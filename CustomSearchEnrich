@@ -1,0 +1,67 @@
+const {BigQuery} = require('@google-cloud/bigquery');
+const {google} = require('googleapis');
+const customsearch = google.customsearch('v1');
+const bigquery = new BigQuery();
+
+const apiKey = 'Your Google API Key';
+const cx = 'Your Custom Search Engine (CX) ID';
+
+const projectId = 'npi-database-438823';
+const datasetId = 'npi_data_first_pull';
+const tableId = 'googlesearch';
+
+async function getCompanyDetailsFromCustomSearch() {
+  // Get the company names from the BigQuery table
+  const query = `SELECT companyName FROM \`${projectId}.${datasetId}.${tableId}\``;
+  const [job] = await bigquery.createQueryJob({query});
+  const [rows] = await job.getQueryResults();
+
+  // Loop through the company names and find the details using the Custom Search API and the Places API
+  for (let row of rows) {
+    const companyName = row.companyName;
+    if (companyName) {
+      const details = await getCompanyDetailsFromSearchAPI(companyName, apiKey, cx);
+
+
+      // Insert the details and the place ID into the BigQuery table
+      const rowsToInsert = [
+        {website: details.website, title: details.title, snippet: details.snippet, formattedUrl: details.formattedUrl},
+      ];
+      await bigquery.dataset(datasetId).table(tableId).insert(rowsToInsert);
+    }
+  }
+}
+
+async function getCompanyDetailsFromSearchAPI(companyName, apiKey, cx) {
+  const res = await customsearch.cse.list({
+    cx: cx,
+    q: companyName,
+    auth: apiKey
+  });
+
+  if (res.data.items && res.data.items.length > 0) {
+    const result = res.data.items[0];  // Get the first result (most relevant)
+
+    // Extract details
+    const website = result.link || "No website found";
+    const title = result.title || "No title found";
+    const snippet = result.snippet || "No snippet found";
+    const formattedUrl = result.formattedUrl || "No URL found";
+
+    // Return the extracted details
+    return {
+      website: website,
+      title: title,
+      snippet: snippet,
+      formattedUrl: formattedUrl
+    };
+  } else {
+    // If no results, return default values
+    return {
+      website: "No website found",
+      title: "No title found",
+      snippet: "No snippet found",
+      formattedUrl: "No URL found"
+    };
+  }
+}
